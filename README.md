@@ -81,12 +81,12 @@ A aplicação estará disponível em `http://localhost:3000`
 
 ## 🎓 Funcionalidades
 
-- ✅ 5 textos de prática (iniciante a avançado)
+- ✅ 120 textos de prática (40 por nível: beginner, intermediate, advanced)
 - ✅ Reconhecimento de voz em tempo real
 - ✅ Análise de pronúncia com IA
 - ✅ Pontuação de 0 a 100
 - ✅ Identificação de palavras mal pronunciadas
-- ✅ Dicas personalizadas de melhoria
+- ✅ Dicas curtas e objetivas de melhoria
 - ✅ Feedback motivacional
 
 ## 🛠️ Estrutura do Projeto
@@ -151,6 +151,37 @@ Analisa a pronúncia do usuário
 **Erro da API Gemini:**
 - Verifique se a chave de API está correta
 - Confirme que não excedeu o limite de requisições
+
+## ☁️ Deploy
+
+### Frontend (Vercel)
+- Root Directory: `frontend`
+- Build Command: `npm run build`
+- Output Directory: `.next`
+- Env: `NEXT_PUBLIC_API_URL=https://<seu-backend>/`
+
+### Backend (Render ou Railway)
+- Root Directory: `backend`
+- Build Command: `npm install`
+- Start Command: `npm run start:prod`
+- Env:
+  - `GEMINI_API_KEY=...`
+  - `PORT=3001` (ou a porta do provedor)
+
+### Ambiente local de produção
+
+```bash
+# Backend
+cd backend
+npm install
+npm run start:prod
+
+# Frontend
+cd frontend
+npm install
+npm run build
+npm run start
+```
 
 ## 📝 Próximas Melhorias
 
