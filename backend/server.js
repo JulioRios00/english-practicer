@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -54,7 +56,24 @@ async function authMiddleware(req, res, next) {
 
 // Middleware
 app.use(cors());
+app.use(compression());
 app.use(express.json());
+
+// Rate limiting for AI endpoints (Gemini free tier: 15 RPM)
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 12,
+  message: { error: 'Muitas requisições. Aguarde um momento e tente novamente.' },
+});
+
+// General rate limiting
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+});
+
+app.use('/api/analyze-pronunciation', aiLimiter);
+app.use('/api/analyze-word-pronunciation', aiLimiter);
 
 // Rota de teste
 app.get('/', (req, res) => {
@@ -375,6 +394,7 @@ app.get('/api/practice-texts', (req, res) => {
     { id: 120, level: 'advanced', text: 'Nevertheless, empirical validation of phenomenological claims remains theoretically problematic.', translation: 'No entanto, a validação empírica de afirmações fenomenológicas permanece teoricamente problemática.' }
   ];
 
+  res.set('Cache-Control', 'public, max-age=3600');
   res.json(texts);
 });
 
@@ -572,6 +592,7 @@ app.get('/api/vocabulary-words', (req, res) => {
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
 
+  res.set('Cache-Control', 'public, max-age=1800');
   res.json(shuffled);
 });
 
