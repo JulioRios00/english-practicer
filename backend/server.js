@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -17,6 +18,38 @@ if (process.env.GEMINI_API_KEY) {
   }
 } else {
   console.warn('⚠️ GEMINI_API_KEY não configurada - usando modo fallback');
+}
+
+// Inicializar Supabase
+let supabase = null;
+if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  console.log('✅ Supabase configurado');
+} else {
+  console.warn('⚠️ SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY não configurados - funcionalidades de auth/sessão desabilitadas');
+}
+
+// Auth middleware - verifica JWT do Supabase
+async function authMiddleware(req, res, next) {
+  if (!supabase) {
+    return res.status(503).json({ error: 'Serviço de autenticação não disponível' });
+  }
+
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) {
+    return res.status(401).json({ error: 'Token não fornecido' });
+  }
+
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) {
+      return res.status(401).json({ error: 'Token inválido' });
+    }
+    req.user = user;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Erro ao verificar token' });
+  }
 }
 
 // Middleware
@@ -540,6 +573,237 @@ app.get('/api/vocabulary-words', (req, res) => {
   }
 
   res.json(shuffled);
+});
+
+// =============================================
+// Rotas autenticadas (requerem login)
+// =============================================
+
+// Salvar sessão de prática
+app.post('/api/save-session', authMiddleware, async (req, res) => {
+  try {
+    const { practice_type, text_id, text_level, original_text, transcribed_text,
+            score, incorrect_words, feedback, suggestions,
+            word, word_category, is_correct, confidence, word_feedback } = req.body;
+
+    if (!practice_type || !['sentence', 'word'].includes(practice_type)) {
+      return res.status(400).json({ error: 'practice_type deve ser "sentence" ou "word"' });
+    }
+
+    const { data, error } = await supabase
+      .from('practice_sessions')
+      .insert({
+        user_id: req.user.id,
+        practice_type,
+        text_id: text_id || null,
+        text_level: text_level || null,
+        original_text: original_text || null,
+        transcribed_text: transcribed_text || null,
+        score: score || null,
+        incorrect_words: incorrect_words || null,
+        feedback: feedback || null,
+        suggestions: suggestions || null,
+        word: word || null,
+        word_category: word_category || null,
+        is_correct: is_correct != null ? is_correct : null,
+        confidence: confidence || null,
+        word_feedback: word_feedback || null,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Erro ao salvar sessão:', error);
+      return res.status(500).json({ error: 'Erro ao salvar sessão' });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('Erro ao salvar sessão:', err);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// Buscar histórico de sessões
+app.get('/api/sessions', authMiddleware, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+    const type = req.query.type;
+    const offset = (page - 1) * limit;
+
+    let query = supabase
+      .from('practice_sessions')
+      .select('*', { count: 'exact' })
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (type && ['sentence', 'word'].includes(type)) {
+      query = query.eq('practice_type', type);
+    }
+
+    const { data, error, count } = await query;
+
+    if (error) {
+      console.error('Erro ao buscar sessões:', error);
+      return res.status(500).json({ error: 'Erro ao buscar sessões' });
+    }
+
+    res.json({
+      sessions: data,
+      pagination: {
+        page,
+        limit,
+        total: count,
+        totalPages: Math.ceil(count / limit),
+      },
+    });
+  } catch (err) {
+    console.error('Erro ao buscar sessões:', err);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// Buscar estatísticas do usuário
+app.get('/api/stats', authMiddleware, async (req, res) => {
+  try {
+    // Buscar todas as sessões do usuário
+    const { data: sessions, error } = await supabase
+      .from('practice_sessions')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Erro ao buscar estatísticas:', error);
+      return res.status(500).json({ error: 'Erro ao buscar estatísticas' });
+    }
+
+    const sentenceSessions = sessions.filter(s => s.practice_type === 'sentence');
+    const wordSessions = sessions.filter(s => s.practice_type === 'word');
+
+    // Calcular streak (dias consecutivos)
+    let streakDays = 0;
+    if (sessions.length > 0) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const uniqueDays = [...new Set(sessions.map(s => {
+        const d = new Date(s.created_at);
+        d.setHours(0, 0, 0, 0);
+        return d.getTime();
+      }))].sort((a, b) => b - a);
+
+      // Verificar se praticou hoje ou ontem
+      const mostRecent = uniqueDays[0];
+      const diffFromToday = (today.getTime() - mostRecent) / (1000 * 60 * 60 * 24);
+      if (diffFromToday <= 1) {
+        streakDays = 1;
+        for (let i = 1; i < uniqueDays.length; i++) {
+          const diff = (uniqueDays[i - 1] - uniqueDays[i]) / (1000 * 60 * 60 * 24);
+          if (diff === 1) {
+            streakDays++;
+          } else {
+            break;
+          }
+        }
+      }
+    }
+
+    // Score over time (últimas 30 sessões de frases)
+    const scoreOverTime = sentenceSessions
+      .slice(0, 30)
+      .reverse()
+      .map(s => ({
+        date: s.created_at,
+        score: s.score,
+        level: s.text_level,
+      }));
+
+    // Breakdown por nível
+    const levelBreakdown = {};
+    for (const level of ['beginner', 'intermediate', 'advanced']) {
+      const levelSessions = sentenceSessions.filter(s => s.text_level === level);
+      if (levelSessions.length > 0) {
+        const avgScore = Math.round(
+          levelSessions.reduce((sum, s) => sum + (s.score || 0), 0) / levelSessions.length
+        );
+        levelBreakdown[level] = {
+          totalSessions: levelSessions.length,
+          averageScore: avgScore,
+        };
+      }
+    }
+
+    const correctWords = wordSessions.filter(s => s.is_correct).length;
+
+    res.json({
+      totalSessions: sessions.length,
+      totalSentenceSessions: sentenceSessions.length,
+      totalWordSessions: wordSessions.length,
+      averageScore: sentenceSessions.length > 0
+        ? Math.round(sentenceSessions.reduce((sum, s) => sum + (s.score || 0), 0) / sentenceSessions.length)
+        : 0,
+      bestScore: sentenceSessions.length > 0
+        ? Math.max(...sentenceSessions.map(s => s.score || 0))
+        : 0,
+      wordAccuracy: wordSessions.length > 0
+        ? Math.round((correctWords / wordSessions.length) * 100)
+        : 0,
+      streakDays,
+      lastPracticeDate: sessions.length > 0 ? sessions[0].created_at : null,
+      scoreOverTime,
+      levelBreakdown,
+    });
+  } catch (err) {
+    console.error('Erro ao buscar estatísticas:', err);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// Buscar perfil do usuário
+app.get('/api/profile', authMiddleware, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', req.user.id)
+      .single();
+
+    if (error) {
+      console.error('Erro ao buscar perfil:', error);
+      return res.status(500).json({ error: 'Erro ao buscar perfil' });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('Erro ao buscar perfil:', err);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// Atualizar perfil do usuário
+app.put('/api/profile', authMiddleware, async (req, res) => {
+  try {
+    const { display_name } = req.body;
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ display_name, updated_at: new Date().toISOString() })
+      .eq('id', req.user.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Erro ao atualizar perfil:', error);
+      return res.status(500).json({ error: 'Erro ao atualizar perfil' });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('Erro ao atualizar perfil:', err);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
 });
 
 app.listen(PORT, () => {
