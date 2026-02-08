@@ -544,21 +544,4 @@ app.get('/api/vocabulary-words', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
-
-  // Keep-alive: self-ping every 14 minutes to prevent Render free tier from sleeping
-  const RENDER_URL = 'https://english-practicer.onrender.com';
-  const KEEP_ALIVE_INTERVAL = 14 * 60 * 1000;
-
-  if (process.env.NODE_ENV === 'production') {
-    setInterval(async () => {
-      try {
-        const response = await fetch(RENDER_URL);
-        console.log(`[Keep-Alive] Ping OK - Status: ${response.status}`);
-      } catch (error) {
-        console.error(`[Keep-Alive] Ping failed:`, error.message);
-      }
-    }, KEEP_ALIVE_INTERVAL);
-
-    console.log(`[Keep-Alive] Self-ping scheduled every 14 minutes to ${RENDER_URL}`);
-  }
 });
