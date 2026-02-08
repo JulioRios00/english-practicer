@@ -1,4 +1,16 @@
 require('dotenv').config();
+const Sentry = require('@sentry/node');
+
+// Initialize Sentry before other imports
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: 0.2,
+  });
+  console.log('✅ Sentry configurado');
+}
+
 const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
@@ -826,6 +838,9 @@ app.put('/api/profile', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Erro interno do servidor' });
   }
 });
+
+// Sentry error handler (must be before app.listen)
+Sentry.setupExpressErrorHandler(app);
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
